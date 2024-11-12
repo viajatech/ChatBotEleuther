@@ -1,0 +1,143 @@
+#pip install --upgrade transformers torch tqdm requests
+
+
+import tkinter as tk
+from tkinter import ttk
+from tkinter.scrolledtext import ScrolledText
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+import threading
+
+# Variables globales para el modelo y el tokenizador
+model = None
+tokenizer = None
+model_name = "EleutherAI/gpt-neo-1.3B"
+
+# Variable global para el historial de conversación
+conversation_history = "El siguiente es un diálogo entre un usuario y un asistente de inteligencia artificial útil y amable.\n"
+
+# Límite máximo de longitud para el historial (en caracteres)
+MAX_HISTORY_LENGTH = 1500  # Puedes ajustar este valor según tus necesidades
+
+def download_model_files():
+    # Función para descargar los archivos del modelo y mostrar progreso
+    model_dir = f"./{model_name.replace('/', '_')}"
+    return model_dir  # Asumimos que los archivos ya están descargados
+
+def load_model():
+    global model, tokenizer
+
+    log_text.insert(tk.END, "Cargando el modelo, por favor espera...\n")
+    log_text.see(tk.END)
+    model_path = download_model_files()
+
+    try:
+        # Cargar el modelo y el tokenizador
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(model_path)
+        model.eval()  # Modo evaluación
+
+        log_text.insert(tk.END, "Modelo cargado exitosamente.\n")
+        log_text.insert(tk.END, "Abriendo la interfaz de chat...\n")
+        log_text.see(tk.END)
+
+        # Después de cargar el modelo, iniciar la interfaz gráfica
+        root.after(1000, open_chat_gui)
+    except Exception as e:
+        log_text.insert(tk.END, f"Error al cargar el modelo: {e}\n")
+        log_text.see(tk.END)
+
+def open_chat_gui():
+    root.destroy()
+    chat_gui = tk.Tk()
+    chat_gui.title("Chat by Viaja Tech")
+    chat_gui.configure(bg='black')
+    chat_gui.geometry('800x600')
+
+    chat_log = ScrolledText(
+        chat_gui, state=tk.DISABLED, bg='black', fg='white', wrap=tk.WORD
+    )
+    chat_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+    user_entry = tk.Entry(chat_gui, width=100, bg='gray20', fg='white')
+    user_entry.pack(padx=10, pady=(0,10), fill=tk.X)
+
+    send_button = tk.Button(
+        chat_gui, text="Enviar",
+        command=lambda: generate_response(user_entry, chat_log),
+        bg='gray30', fg='white'
+    )
+    send_button.pack(pady=(0,10))
+
+    chat_gui.mainloop()
+
+def generate_response(user_entry, chat_log):
+    user_input = user_entry.get()
+    user_entry.delete(0, tk.END)
+
+    # Actualizar el historial de conversación
+    global conversation_history
+    conversation_history += f"Usuario: {user_input}\n"
+
+    # Limitar la longitud del historial si excede el máximo permitido
+    if len(conversation_history) > MAX_HISTORY_LENGTH:
+        conversation_history = conversation_history[-MAX_HISTORY_LENGTH:]
+
+    chat_log.config(state=tk.NORMAL)
+    chat_log.insert(tk.END, f"Tú: {user_input}\n")
+    chat_log.config(state=tk.DISABLED)
+    chat_log.see(tk.END)
+
+    # Función para ejecutar en hilo separado
+    def run_model():
+        global conversation_history  # Añadido para acceder a la variable global
+
+        with torch.no_grad():
+            # Construir el prompt con el historial de conversación
+            prompt = conversation_history + "Asistente:"
+
+            input_ids = tokenizer.encode(prompt, return_tensors='pt')
+
+            generated_ids = model.generate(
+                input_ids,
+                max_new_tokens=150,
+                pad_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=3,
+                do_sample=True,
+                top_k=50,
+                top_p=0.95,
+                temperature=0.7,
+                eos_token_id=tokenizer.eos_token_id
+            )
+
+            output = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            # Extraer solo la respuesta del asistente
+            response = output[len(prompt):].split("Usuario:")[0].strip()
+
+            # Actualizar el historial de conversación con la respuesta
+            conversation_history += f"Asistente: {response}\n"
+
+            # Limitar la longitud del historial si excede el máximo permitido
+            if len(conversation_history) > MAX_HISTORY_LENGTH:
+                conversation_history = conversation_history[-MAX_HISTORY_LENGTH:]
+
+            chat_log.config(state=tk.NORMAL)
+            chat_log.insert(tk.END, f"Bot: {response}\n\n")
+            chat_log.config(state=tk.DISABLED)
+            chat_log.see(tk.END)
+
+    # Crear y empezar hilo para generar la respuesta
+    threading.Thread(target=run_model).start()
+
+# Ventana de LOGS
+root = tk.Tk()
+root.title("Cargando modelo - Chat by Viaja Tech")
+root.geometry('600x400')
+
+log_text = tk.Text(root, state=tk.NORMAL)
+log_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+# Iniciar carga del modelo en un hilo separado
+threading.Thread(target=load_model).start()
+
+root.mainloop()
